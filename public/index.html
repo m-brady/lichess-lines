@@ -6,6 +6,7 @@
 <title>Lichess Lines</title>
 <style>
   :root {
+    color-scheme: dark;
     --bg: #1a1a1a;
     --panel: #242424;
     --border: #333;
@@ -38,6 +39,14 @@
     border-radius: 4px;
     padding: 4px 8px;
     font: inherit;
+  }
+  option {
+    background: #2e2e2e;
+    color: var(--text);
+  }
+  option:checked {
+    background: var(--accent);
+    color: #1a1a1a;
   }
   button { cursor: pointer; }
   button:hover { background: #3a3a3a; }
