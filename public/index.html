@@ -102,6 +102,35 @@
     font-size: 11px;
     margin-left: 4px;
   }
+  button.running { background: #5a2222; border-color: #6a3030; color: #f0c0c0; }
+  .scan-meta { color: var(--muted); font-size: 12px; }
+  .scan-progress { color: var(--muted); font-size: 12px; padding: 8px 0; }
+  .scan-empty { color: var(--muted); font-size: 13px; padding: 12px 0; }
+  .scan-row {
+    display: grid;
+    grid-template-columns: 56px auto 1fr auto;
+    grid-template-areas:
+      "pain line   line  meta"
+      "pain bar    bar   bar"
+      "pain opening opening opening";
+    column-gap: 10px;
+    row-gap: 4px;
+    padding: 8px 6px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+  }
+  .scan-row:hover { background: #2e2e2e; }
+  .scan-row .pain { grid-area: pain; align-self: center; text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; color: var(--loss); }
+  .scan-row .line {
+    grid-area: line;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 13px;
+    word-break: break-all;
+  }
+  .scan-row .meta { grid-area: meta; color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .scan-row .bar { grid-area: bar; height: 6px; border-radius: 2px; overflow: hidden; display: flex; }
+  .scan-row .bar > div { height: 100%; }
+  .scan-row .opening { grid-area: opening; color: var(--muted); font-size: 12px; }
 
   @media (max-width: 600px) {
     .wrap { padding: 12px 8px; }
@@ -198,6 +227,7 @@
       <input id="since" type="month" />
       <button id="reset">Reset to preset</button>
       <button id="back">← Back</button>
+      <button id="scan" title="Walk this opening for the worst sub-lines you face">Scan weak lines</button>
     </div>
   </div>
 
@@ -208,6 +238,14 @@
     <div id="opening" style="color:var(--muted); margin-top:4px"></div>
     <div class="bar" id="bar"></div>
     <div class="totals" id="totals"></div>
+  </div>
+
+  <div class="panel" id="scanPanel" style="display:none">
+    <div class="row" style="justify-content:space-between">
+      <strong id="scanTitle">Weak lines</strong>
+      <span class="scan-meta" id="scanMeta"></span>
+    </div>
+    <div id="scanBody"></div>
   </div>
 
   <div class="panel" id="movesPanel">
@@ -261,12 +299,13 @@ function setPreset(key) {
     b.classList.toggle("active", b.dataset.preset === key);
   });
   refresh();
+  maybeRenderCachedScan();
 }
 
-function buildQuery() {
+function buildQueryFor(play, color = state.color) {
   const params = new URLSearchParams();
-  params.set("color", state.color);
-  if (state.play.length) params.set("play", state.play.join(","));
+  params.set("color", color);
+  if (play.length) params.set("play", play.join(","));
   const speeds = [...$("speeds").selectedOptions].map((o) => o.value);
   if (speeds.length) params.set("speeds", speeds.join(","));
   const modes = $("modes").value;
@@ -274,6 +313,10 @@ function buildQuery() {
   const since = $("since").value; // YYYY-MM
   if (since) params.set("since", since);
   return params.toString();
+}
+
+function buildQuery() {
+  return buildQueryFor(state.play, state.color);
 }
 
 function fmtPct(n, total) {
@@ -445,6 +488,270 @@ async function refresh(fresh = false) {
   }
 }
 
+const SCAN = {
+  MIN_GAMES: 5,
+  MIN_OPP_SHARE: 0.05,
+  // Lower threshold than opponents': we want to catch your secondary repertoire
+  // (e.g. you play c3 60% but also Center Attack 30%) and not just your main line.
+  MIN_USER_SHARE: 0.25,
+  MAX_DEPTH_PLIES: 12,
+  CONCURRENCY: 4,
+  TOP_RESULTS: 15,
+};
+
+let scanRun = null; // { abort: false } while running, else null
+
+function scanCacheKey() {
+  const speeds = [...$("speeds").selectedOptions].map((o) => o.value).join(",");
+  const modes = $("modes").value;
+  const since = $("since").value;
+  // Keyed by the *preset* root + filters, not the user's current navigation.
+  const root = PRESETS[state.presetKey];
+  return `lichess-lines:scan:v1:${state.presetKey}:${root.color}:${root.play.join(",")}:${speeds}:${modes}:${since}`;
+}
+
+function loadScanFromStorage() {
+  try {
+    const raw = localStorage.getItem(scanCacheKey());
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveScanToStorage(payload) {
+  try {
+    localStorage.setItem(scanCacheKey(), JSON.stringify(payload));
+  } catch {}
+}
+
+function fmtAge(ms) {
+  const s = Math.round((Date.now() - ms) / 1000);
+  if (s < 60) return `${s}s ago`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.round(h / 24)}d ago`;
+}
+
+function sanLineToText(sanArr, rootColor) {
+  const out = [];
+  for (let i = 0; i < sanArr.length; i++) {
+    const num = Math.floor(i / 2) + 1;
+    if (i === 0 && rootColor === "white") out.push(`${num}.`);
+    else if (i % 2 === 0) out.push(`${num}.`);
+    else if (i === 0) out.push(`${num}...`);
+    out.push(sanArr[i]);
+  }
+  return out.join(" ");
+}
+
+async function fetchScanPosition(play, color) {
+  const qs = buildQueryFor(play, color);
+  const r = await fetch("/api/explorer?" + qs);
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+
+async function runScan() {
+  if (scanRun) {
+    scanRun.abort = true;
+    return;
+  }
+  const run = { abort: false };
+  scanRun = run;
+  $("scan").textContent = "Stop scan";
+  $("scan").classList.add("running");
+
+  const preset = PRESETS[state.presetKey];
+  const rootPlay = preset.play.slice();
+  const rootSan = preset.play.map((u) => KNOWN_SAN[u] || u);
+  const color = preset.color;
+
+  $("scanPanel").style.display = "";
+  $("scanTitle").textContent = `Weak lines · ${preset.label}`;
+  $("scanMeta").textContent = "";
+  $("scanBody").innerHTML = '<div class="scan-progress">Starting…</div>';
+
+  const queue = [{ play: rootPlay, san: rootSan }];
+  const seen = new Set();
+  const terminals = [];
+  let positionsChecked = 0;
+  let rootScore = 0.5;
+  let rootGames = 0;
+
+  const updateProgress = () => {
+    $("scanBody").innerHTML =
+      `<div class="scan-progress">Checked ${positionsChecked} positions · ${queue.length + active} in queue…</div>`;
+  };
+
+  let active = 0;
+
+  async function visit(node) {
+    const key = node.play.join(",");
+    if (seen.has(key)) return;
+    seen.add(key);
+    if (run.abort) return;
+
+    let data;
+    try {
+      data = await fetchScanPosition(node.play, color);
+    } catch (e) {
+      console.warn("scan fetch failed", node.san.join(" "), e);
+      return;
+    }
+    positionsChecked++;
+    updateProgress();
+
+    const games = data.games;
+    if (games < SCAN.MIN_GAMES) return;
+
+    const userWins = color === "white" ? data.white : data.black;
+    const userLosses = color === "white" ? data.black : data.white;
+    const score = (userWins + data.draws / 2) / games;
+    if (node.play.length === rootPlay.length) {
+      rootScore = score;
+      rootGames = games;
+    }
+    const whiteToMove = node.play.length % 2 === 0;
+    const userToMove = whiteToMove === (color === "white");
+    const depthFromRoot = node.play.length - rootPlay.length;
+
+    let branched = false;
+    if (depthFromRoot < SCAN.MAX_DEPTH_PLIES) {
+      const minShare = userToMove ? SCAN.MIN_USER_SHARE : SCAN.MIN_OPP_SHARE;
+      for (const m of data.moves) {
+        if (m.games < SCAN.MIN_GAMES) continue;
+        if (m.games / games < minShare) continue;
+        queue.push({ play: [...node.play, m.uci], san: [...node.san, m.san] });
+        branched = true;
+      }
+    }
+
+    if (!branched) {
+      terminals.push({
+        play: node.play.slice(),
+        san: node.san.slice(),
+        games,
+        userWins,
+        draws: data.draws,
+        userLosses,
+        score,
+        opening: data.opening,
+        terminalReason: depthFromRoot >= SCAN.MAX_DEPTH_PLIES ? "depth" : "thin",
+      });
+    }
+  }
+
+  await new Promise((resolve) => {
+    const pump = () => {
+      if (run.abort) return resolve();
+      while (active < SCAN.CONCURRENCY && queue.length > 0) {
+        const node = queue.shift();
+        active++;
+        visit(node).finally(() => {
+          active--;
+          if (queue.length === 0 && active === 0) resolve();
+          else pump();
+        });
+      }
+      if (queue.length === 0 && active === 0) resolve();
+    };
+    pump();
+  });
+
+  scanRun = null;
+  $("scan").textContent = "Scan weak lines";
+  $("scan").classList.remove("running");
+
+  if (run.abort) {
+    $("scanBody").innerHTML = `<div class="scan-empty">Scan stopped after ${positionsChecked} positions.</div>`;
+    return;
+  }
+
+  const ranked = terminals
+    .map((t) => ({ ...t, pain: t.games * Math.max(0, rootScore - t.score) }))
+    .filter((t) => t.pain > 0)
+    .sort((a, b) => b.pain - a.pain)
+    .slice(0, SCAN.TOP_RESULTS);
+
+  const payload = {
+    presetKey: state.presetKey,
+    color,
+    rootPlay,
+    rootSan,
+    rootScore,
+    rootGames,
+    ranked,
+    positionsChecked,
+    scannedAt: Date.now(),
+  };
+  saveScanToStorage(payload);
+  renderScanResults(payload);
+}
+
+function renderScanResults(payload) {
+  $("scanPanel").style.display = "";
+  const preset = PRESETS[payload.presetKey];
+  $("scanTitle").textContent = `Weak lines · ${preset ? preset.label : payload.presetKey}`;
+  const baselinePct = payload.rootScore !== undefined
+    ? `baseline ${Math.round(payload.rootScore * 100)}%`
+    : "";
+  $("scanMeta").textContent = [
+    `${payload.positionsChecked} positions`,
+    baselinePct,
+    `scanned ${fmtAge(payload.scannedAt)}`,
+  ].filter(Boolean).join(" · ");
+
+  if (!payload.ranked.length) {
+    $("scanBody").innerHTML =
+      `<div class="scan-empty">No sub-lines underperform your baseline at depth ${SCAN.MAX_DEPTH_PLIES} with ≥${SCAN.MIN_GAMES} games. Either you're scoring ≥${Math.round((payload.rootScore || 0.5) * 100)}% everywhere your sample is meaningful, or the data's still thin.</div>`;
+    return;
+  }
+
+  const rows = payload.ranked.map((t) => {
+    const wp = (t.userWins / t.games) * 100;
+    const dp = (t.draws / t.games) * 100;
+    const lp = (t.userLosses / t.games) * 100;
+    const lineText = sanLineToText(t.san, payload.color);
+    const opening = t.opening ? `${t.opening.eco} ${t.opening.name}` : "";
+    return `
+      <div class="scan-row" data-idx="${payload.ranked.indexOf(t)}">
+        <div class="pain" title="games × max(0, baseline − score) — points lost vs your average in this opening">${t.pain.toFixed(1)}</div>
+        <div class="line">${lineText}</div>
+        <div class="meta">${t.games}g · ${Math.round(t.score * 100)}%</div>
+        <div class="bar">
+          <div style="width:${wp}%;background:var(--win)"></div>
+          <div style="width:${dp}%;background:var(--draw)"></div>
+          <div style="width:${lp}%;background:var(--loss)"></div>
+        </div>
+        <div class="opening">${opening}</div>
+      </div>`;
+  }).join("");
+
+  $("scanBody").innerHTML = rows;
+  $("scanBody").querySelectorAll(".scan-row").forEach((el) => {
+    el.onclick = () => {
+      const t = payload.ranked[Number(el.dataset.idx)];
+      state.color = payload.color;
+      state.play = t.play.slice();
+      state.sanHistory = t.san.slice();
+      refresh();
+    };
+  });
+}
+
+function maybeRenderCachedScan() {
+  const cached = loadScanFromStorage();
+  if (cached && cached.presetKey === state.presetKey) {
+    renderScanResults(cached);
+  } else {
+    $("scanPanel").style.display = "none";
+    $("scanBody").innerHTML = "";
+  }
+}
+
 document.querySelectorAll(".preset").forEach((b) => {
   b.onclick = () => setPreset(b.dataset.preset);
 });
@@ -456,9 +763,10 @@ $("back").onclick = () => {
     refresh();
   }
 };
-$("speeds").onchange = refresh;
-$("modes").onchange = refresh;
-$("since").onchange = refresh;
+$("scan").onclick = runScan;
+$("speeds").onchange = () => { refresh(); maybeRenderCachedScan(); };
+$("modes").onchange = () => { refresh(); maybeRenderCachedScan(); };
+$("since").onchange = () => { refresh(); maybeRenderCachedScan(); };
 
 loadAccounts();
 setPreset("italian");

@@ -3,6 +3,7 @@ import { Hono } from "hono";
 type Env = {
   ASSETS: Fetcher;
   LICHESS_USERS: string;
+  EXPLORER_KV?: KVNamespace;
 };
 
 type Opening = { eco: string; name: string } | null;
@@ -75,10 +76,27 @@ app.get("/api/explorer", async (c) => {
   reqUrl.searchParams.delete("fresh");
   const cache = caches.default;
   const cacheKey = new Request(reqUrl.toString(), { method: "GET" });
+  const kv = c.env.EXPLORER_KV;
+  const kvKey = `explorer:${reqUrl.pathname}${reqUrl.search}`;
 
   if (!wantFresh) {
-    const hit = await cache.match(cacheKey);
-    if (hit) return hit;
+    const edgeHit = await cache.match(cacheKey);
+    if (edgeHit) return edgeHit;
+
+    if (kv) {
+      const kvHit = await kv.get(kvKey);
+      if (kvHit) {
+        const response = new Response(kvHit, {
+          headers: {
+            "content-type": "application/json",
+            "cache-control": "public, max-age=3600",
+            "x-cache": "kv",
+          },
+        });
+        c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
+        return response;
+      }
+    }
   }
 
   const passthrough = ["play", "speeds", "modes", "since", "until", "variant", "moves"] as const;
@@ -103,14 +121,20 @@ app.get("/api/explorer", async (c) => {
   const merged = merge(responses);
   // Shorter TTL while Lichess is still indexing so the UI catches up.
   const isPartial = Object.values(merged.perUser).some((s) => s.queuePosition !== undefined);
-  const ttl = isPartial ? 30 : 300;
-  const response = new Response(JSON.stringify(merged), {
+  const edgeTtl = isPartial ? 30 : 3600;
+  const kvTtl = isPartial ? 60 : 21600;
+  const body = JSON.stringify(merged);
+  const response = new Response(body, {
     headers: {
       "content-type": "application/json",
-      "cache-control": `public, max-age=${ttl}`,
+      "cache-control": `public, max-age=${edgeTtl}`,
+      "x-cache": "miss",
     },
   });
   c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
+  if (kv) {
+    c.executionCtx.waitUntil(kv.put(kvKey, body, { expirationTtl: kvTtl }));
+  }
   return response;
 });
 

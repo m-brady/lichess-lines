@@ -10,5 +10,9 @@
   "vars": {
     // Comma-separated list of your Lichess usernames. Edit before deploying.
     "LICHESS_USERS": "junkvolume,bradymem"
-  }
+  },
+  // Long-TTL cache for explorer responses, used by the weak-lines scan.
+  "kv_namespaces": [
+    { "binding": "EXPLORER_KV", "id": "d05468d1911749a798df36e23034abf5" }
+  ]
 }
