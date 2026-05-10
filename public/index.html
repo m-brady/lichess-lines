@@ -64,6 +64,35 @@
   .empty, .loading, .error { padding: 24px; text-align: center; color: var(--muted); }
   .error { color: var(--loss); }
   .totals { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .indexing {
+    background: #3a2e1a;
+    border: 1px solid #5a4422;
+    color: #e5c07b;
+    border-radius: 4px;
+    padding: 8px 12px;
+    margin-bottom: 12px;
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .indexing button { background: #5a4422; border-color: #6a5430; color: #e5c07b; }
+  .indexing button:hover { background: #6a5430; }
+  .indexing .spinner {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: #e5c07b; opacity: 0.6;
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
+  .badge {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 3px;
+    background: #3a2e1a;
+    color: #e5c07b;
+    font-size: 11px;
+    margin-left: 4px;
+  }
 </style>
 </head>
 <body>
@@ -104,6 +133,8 @@
       <button id="back">← Back</button>
     </div>
   </div>
+
+  <div id="indexingBanner" style="display:none"></div>
 
   <div class="panel">
     <div><strong>Line:</strong> <span class="crumbs" id="crumbs"></span></div>
@@ -231,16 +262,47 @@ function renderTotals(data) {
   const userWins = state.color === "white" ? data.white : data.black;
   const userLosses = state.color === "white" ? data.black : data.white;
   const score = total ? ((userWins + data.draws / 2) / total * 100).toFixed(1) : "0.0";
-  const parts = [
+  const head = [
     `${total} games`,
     `score ${score}%`,
     `${fmtPct(userWins, total)} W / ${fmtPct(data.draws, total)} D / ${fmtPct(userLosses, total)} L`,
-  ];
-  for (const [user, s] of Object.entries(data.perUser)) {
+  ].map((t) => `<span>${t}</span>`).join(" · ");
+  const perUser = Object.entries(data.perUser).map(([user, s]) => {
     const t = s.white + s.draws + s.black;
-    parts.push(`${user}: ${t}`);
+    let badge = "";
+    if (s.queuePosition !== undefined) {
+      badge = s.queuePosition > 0
+        ? `<span class="badge">queued #${s.queuePosition}</span>`
+        : `<span class="badge">indexing…</span>`;
+    }
+    return `<span>${user}: ${t}${badge}</span>`;
+  }).join(" · ");
+  $("totals").innerHTML = perUser ? `${head} · ${perUser}` : head;
+}
+
+function renderIndexingBanner(data) {
+  const banner = $("indexingBanner");
+  const indexing = Object.entries(data.perUser).filter(
+    ([, s]) => s.queuePosition !== undefined,
+  );
+  if (!indexing.length) {
+    banner.style.display = "none";
+    banner.innerHTML = "";
+    return;
   }
-  $("totals").textContent = parts.join(" · ");
+  const parts = indexing.map(([user, s]) =>
+    s.queuePosition > 0
+      ? `<strong>${user}</strong> (queued #${s.queuePosition})`
+      : `<strong>${user}</strong> (indexing now)`,
+  );
+  banner.style.display = "flex";
+  banner.className = "indexing";
+  banner.innerHTML =
+    `<span class="spinner"></span>` +
+    `<span>Lichess is still building the opening index for ${parts.join(", ")}. ` +
+    `Totals shown are partial — Recheck to query Lichess again.</span>` +
+    `<button id="recheck" style="margin-left:auto">Recheck</button>`;
+  $("recheck").onclick = () => refresh(true);
 }
 
 function renderMoves(moves) {
@@ -294,17 +356,19 @@ function renderMoves(moves) {
   });
 }
 
-async function refresh() {
+async function refresh(fresh = false) {
   renderCrumbs();
   $("movesPanel").innerHTML = '<div class="loading">Loading…</div>';
   try {
-    const r = await fetch("/api/explorer?" + buildQuery());
+    const qs = buildQuery() + (fresh ? "&fresh=1" : "");
+    const r = await fetch("/api/explorer?" + qs);
     if (!r.ok) {
       const j = await r.json().catch(() => ({}));
       throw new Error(j.error || `HTTP ${r.status}`);
     }
     const data = await r.json();
     $("opening").textContent = data.opening ? `${data.opening.eco} ${data.opening.name}` : "";
+    renderIndexingBanner(data);
     renderBar(data.white, data.draws, data.black);
     renderTotals(data);
     renderMoves(data.moves);

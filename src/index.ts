@@ -31,6 +31,16 @@ type ExplorerResponse = {
 
 type MergedMove = Omit<ExplorerMove, "game"> & { games: number };
 
+type UserStats = {
+  white: number;
+  draws: number;
+  black: number;
+  // Present while Lichess is still building the player's index.
+  // > 0 = waiting in queue at that position; 0 = actively indexing (partial data).
+  // Absent = fully indexed, totals are final.
+  queuePosition?: number;
+};
+
 type MergedResponse = {
   opening: Opening;
   white: number;
@@ -38,7 +48,7 @@ type MergedResponse = {
   black: number;
   games: number;
   moves: MergedMove[];
-  perUser: Record<string, { white: number; draws: number; black: number }>;
+  perUser: Record<string, UserStats>;
 };
 
 const app = new Hono<{ Bindings: Env }>();
@@ -57,6 +67,18 @@ app.get("/api/explorer", async (c) => {
   const color = c.req.query("color");
   if (color !== "white" && color !== "black") {
     return c.json({ error: "color must be 'white' or 'black'" }, 400);
+  }
+
+  // Cache key strips ?fresh so a recheck and a normal call share the same slot.
+  const reqUrl = new URL(c.req.url);
+  const wantFresh = reqUrl.searchParams.get("fresh") === "1";
+  reqUrl.searchParams.delete("fresh");
+  const cache = caches.default;
+  const cacheKey = new Request(reqUrl.toString(), { method: "GET" });
+
+  if (!wantFresh) {
+    const hit = await cache.match(cacheKey);
+    if (hit) return hit;
   }
 
   const passthrough = ["play", "speeds", "modes", "since", "until", "variant", "moves"] as const;
@@ -78,7 +100,18 @@ app.get("/api/explorer", async (c) => {
     }),
   );
 
-  return c.json(merge(responses));
+  const merged = merge(responses);
+  // Shorter TTL while Lichess is still indexing so the UI catches up.
+  const isPartial = Object.values(merged.perUser).some((s) => s.queuePosition !== undefined);
+  const ttl = isPartial ? 30 : 300;
+  const response = new Response(JSON.stringify(merged), {
+    headers: {
+      "content-type": "application/json",
+      "cache-control": `public, max-age=${ttl}`,
+    },
+  });
+  c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
+  return response;
 });
 
 async function fetchFirstNdjson(url: string): Promise<ExplorerResponse> {
@@ -114,7 +147,9 @@ function merge(entries: readonly (readonly [string, ExplorerResponse])[]): Merge
   const moveMap = new Map<string, MergedMove & { ratingSum: number; perfSum: number }>();
 
   for (const [user, r] of entries) {
-    perUser[user] = { white: r.white, draws: r.draws, black: r.black };
+    const stats: UserStats = { white: r.white, draws: r.draws, black: r.black };
+    if (r.queuePosition !== undefined) stats.queuePosition = r.queuePosition;
+    perUser[user] = stats;
     white += r.white;
     draws += r.draws;
     black += r.black;
