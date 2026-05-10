@@ -372,7 +372,7 @@ function renderIndexingBanner(data) {
   $("recheck").onclick = () => refresh(true);
 }
 
-function renderMoves(moves) {
+function renderMoves(moves, parentOpening) {
   const panel = $("movesPanel");
   if (!moves.length) {
     panel.innerHTML = '<div class="empty">No moves at this position.</div>';
@@ -386,7 +386,8 @@ function renderMoves(moves) {
     const dp = (m.draws / m.games) * 100;
     const lp = (userLosses / m.games) * 100;
     const sharePct = ((m.games / totalGames) * 100).toFixed(1);
-    const opening = m.opening ? `${m.opening.eco} ${m.opening.name}` : "";
+    const named = m.opening || parentOpening;
+    const opening = named ? `${named.eco} ${named.name}` : "";
     return `
       <tr data-uci="${m.uci}" data-san="${m.san}">
         <td class="san">${m.san}</td>
@@ -438,7 +439,7 @@ async function refresh(fresh = false) {
     renderIndexingBanner(data);
     renderBar(data.white, data.draws, data.black);
     renderTotals(data);
-    renderMoves(data.moves);
+    renderMoves(data.moves, data.opening);
   } catch (e) {
     $("movesPanel").innerHTML = `<div class="error">${e.message}</div>`;
   }
