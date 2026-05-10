@@ -1,0 +1,331 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Lichess Lines</title>
+<style>
+  :root {
+    --bg: #1a1a1a;
+    --panel: #242424;
+    --border: #333;
+    --text: #e8e8e8;
+    --muted: #888;
+    --win: #4a9d4a;
+    --draw: #888;
+    --loss: #c44;
+    --accent: #d18b47;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  .wrap { max-width: 900px; margin: 0 auto; padding: 16px; }
+  header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 16px; }
+  h1 { margin: 0; font-size: 20px; }
+  .accounts { color: var(--muted); font-size: 12px; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin-bottom: 12px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .row + .row { margin-top: 8px; }
+  label { color: var(--muted); font-size: 12px; margin-right: 4px; }
+  select, input, button {
+    background: #2e2e2e;
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px 8px;
+    font: inherit;
+  }
+  button { cursor: pointer; }
+  button:hover { background: #3a3a3a; }
+  button.preset { background: #333; }
+  button.preset.active { background: var(--accent); color: #1a1a1a; border-color: var(--accent); }
+  .bar { display: flex; height: 24px; border-radius: 4px; overflow: hidden; margin: 8px 0; }
+  .bar > div { display: flex; align-items: center; justify-content: center; font-size: 11px; color: #fff; min-width: 0; }
+  .bar .w { background: var(--win); }
+  .bar .d { background: var(--draw); }
+  .bar .l { background: var(--loss); }
+  .crumbs { font-family: ui-monospace, "SF Mono", Menlo, monospace; color: var(--accent); word-break: break-all; }
+  .crumbs span { cursor: pointer; }
+  .crumbs span:hover { text-decoration: underline; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: normal; font-size: 12px; }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover { background: #2e2e2e; }
+  td.san { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-weight: 600; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.opening { color: var(--muted); font-size: 12px; }
+  .mini-bar { display: inline-flex; height: 8px; width: 80px; border-radius: 2px; overflow: hidden; vertical-align: middle; }
+  .mini-bar > div { height: 100%; }
+  .empty, .loading, .error { padding: 24px; text-align: center; color: var(--muted); }
+  .error { color: var(--loss); }
+  .totals { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin-top: 4px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Lichess Lines</h1>
+    <div class="accounts" id="accounts"></div>
+  </header>
+
+  <div class="panel">
+    <div class="row">
+      <strong>Preset:</strong>
+      <button class="preset" data-preset="italian">Italian (White)</button>
+      <button class="preset" data-preset="caro">Caro-Kann (Black)</button>
+      <button class="preset" data-preset="white-e4">All 1.e4 (White)</button>
+      <button class="preset" data-preset="black-vs-e4">All vs 1.e4 (Black)</button>
+    </div>
+    <div class="row">
+      <label>Speeds</label>
+      <select id="speeds" multiple size="1" style="width:auto">
+        <option value="bullet">bullet</option>
+        <option value="blitz" selected>blitz</option>
+        <option value="rapid" selected>rapid</option>
+        <option value="classical">classical</option>
+        <option value="correspondence">correspondence</option>
+      </select>
+      <label>Modes</label>
+      <select id="modes">
+        <option value="">all</option>
+        <option value="rated" selected>rated</option>
+        <option value="casual">casual</option>
+      </select>
+      <label>Since</label>
+      <input id="since" type="month" />
+      <button id="reset">Reset to preset</button>
+      <button id="back">← Back</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div><strong>Line:</strong> <span class="crumbs" id="crumbs"></span></div>
+    <div id="opening" style="color:var(--muted); margin-top:4px"></div>
+    <div class="bar" id="bar"></div>
+    <div class="totals" id="totals"></div>
+  </div>
+
+  <div class="panel" id="movesPanel">
+    <div class="loading">Loading…</div>
+  </div>
+</div>
+
+<script>
+const PRESETS = {
+  italian:      { color: "white", play: ["e2e4", "e7e5", "g1f3", "b8c6", "f1c4"], label: "Italian (White)" },
+  caro:         { color: "black", play: ["e2e4", "c7c6"],                          label: "Caro-Kann (Black)" },
+  "white-e4":   { color: "white", play: ["e2e4"],                                  label: "1.e4 (White)" },
+  "black-vs-e4":{ color: "black", play: ["e2e4"],                                  label: "vs 1.e4 (Black)" },
+};
+
+// UCI -> SAN at known starting positions for breadcrumbs. Tiny lookup; for moves
+// already in the play sequence (presets) we know SAN. New moves come back from API.
+const KNOWN_SAN = {
+  e2e4: "e4", e7e5: "e5", c7c6: "c6", g1f3: "Nf3", b8c6: "Nc6", f1c4: "Bc4",
+  d2d4: "d4", d7d5: "d5", b1c3: "Nc3", c2c4: "c4",
+};
+
+let state = {
+  presetKey: "italian",
+  color: "white",
+  play: PRESETS.italian.play.slice(),
+  sanHistory: PRESETS.italian.play.map((u) => KNOWN_SAN[u] || u),
+};
+
+const $ = (id) => document.getElementById(id);
+
+async function loadAccounts() {
+  try {
+    const r = await fetch("/api/users");
+    const j = await r.json();
+    $("accounts").textContent = j.users.length ? j.users.join(" + ") : "(no users configured)";
+  } catch {
+    $("accounts").textContent = "(failed to load users)";
+  }
+}
+
+function setPreset(key) {
+  const p = PRESETS[key];
+  state.presetKey = key;
+  state.color = p.color;
+  state.play = p.play.slice();
+  state.sanHistory = p.play.map((u) => KNOWN_SAN[u] || u);
+  document.querySelectorAll(".preset").forEach((b) => {
+    b.classList.toggle("active", b.dataset.preset === key);
+  });
+  refresh();
+}
+
+function buildQuery() {
+  const params = new URLSearchParams();
+  params.set("color", state.color);
+  if (state.play.length) params.set("play", state.play.join(","));
+  const speeds = [...$("speeds").selectedOptions].map((o) => o.value);
+  if (speeds.length) params.set("speeds", speeds.join(","));
+  const modes = $("modes").value;
+  if (modes) params.set("modes", modes);
+  const since = $("since").value; // YYYY-MM
+  if (since) params.set("since", since);
+  return params.toString();
+}
+
+function fmtPct(n, total) {
+  if (!total) return "0%";
+  return Math.round((n / total) * 100) + "%";
+}
+
+function renderCrumbs() {
+  const el = $("crumbs");
+  el.innerHTML = "";
+  if (!state.sanHistory.length) {
+    el.textContent = "(start)";
+    return;
+  }
+  state.sanHistory.forEach((san, i) => {
+    const span = document.createElement("span");
+    const moveNum = state.color === "white" ? Math.floor(i / 2) + 1 : Math.floor((i + 1) / 2) + (i === 0 ? 0 : 0);
+    // simpler numbering: increment on white's move (even index from start)
+    const num = Math.floor(i / 2) + 1;
+    span.textContent = (i % 2 === 0 ? `${num}.` : "") + san + " ";
+    span.title = "Truncate line here";
+    span.onclick = () => {
+      state.play = state.play.slice(0, i + 1);
+      state.sanHistory = state.sanHistory.slice(0, i + 1);
+      refresh();
+    };
+    el.appendChild(span);
+  });
+}
+
+function renderBar(white, draws, black) {
+  const total = white + draws + black;
+  const userWins = state.color === "white" ? white : black;
+  const userLosses = state.color === "white" ? black : white;
+  const bar = $("bar");
+  bar.innerHTML = "";
+  if (!total) {
+    bar.style.display = "none";
+    return;
+  }
+  bar.style.display = "flex";
+  const wPct = (userWins / total) * 100;
+  const dPct = (draws / total) * 100;
+  const lPct = (userLosses / total) * 100;
+  bar.innerHTML =
+    `<div class="w" style="width:${wPct}%">${wPct > 8 ? `${userWins}W` : ""}</div>` +
+    `<div class="d" style="width:${dPct}%">${dPct > 8 ? `${draws}D` : ""}</div>` +
+    `<div class="l" style="width:${lPct}%">${lPct > 8 ? `${userLosses}L` : ""}</div>`;
+}
+
+function renderTotals(data) {
+  const total = data.games;
+  const userWins = state.color === "white" ? data.white : data.black;
+  const userLosses = state.color === "white" ? data.black : data.white;
+  const score = total ? ((userWins + data.draws / 2) / total * 100).toFixed(1) : "0.0";
+  const parts = [
+    `${total} games`,
+    `score ${score}%`,
+    `${fmtPct(userWins, total)} W / ${fmtPct(data.draws, total)} D / ${fmtPct(userLosses, total)} L`,
+  ];
+  for (const [user, s] of Object.entries(data.perUser)) {
+    const t = s.white + s.draws + s.black;
+    parts.push(`${user}: ${t}`);
+  }
+  $("totals").textContent = parts.join(" · ");
+}
+
+function renderMoves(moves) {
+  const panel = $("movesPanel");
+  if (!moves.length) {
+    panel.innerHTML = '<div class="empty">No moves at this position.</div>';
+    return;
+  }
+  const totalGames = moves.reduce((s, m) => s + m.games, 0);
+  const rows = moves.map((m) => {
+    const userWins = state.color === "white" ? m.white : m.black;
+    const userLosses = state.color === "white" ? m.black : m.white;
+    const wp = (userWins / m.games) * 100;
+    const dp = (m.draws / m.games) * 100;
+    const lp = (userLosses / m.games) * 100;
+    const sharePct = ((m.games / totalGames) * 100).toFixed(1);
+    const opening = m.opening ? `${m.opening.eco} ${m.opening.name}` : "";
+    return `
+      <tr data-uci="${m.uci}" data-san="${m.san}">
+        <td class="san">${m.san}</td>
+        <td class="num">${m.games}</td>
+        <td class="num">${sharePct}%</td>
+        <td>
+          <span class="mini-bar">
+            <div style="width:${wp}%;background:var(--win)"></div>
+            <div style="width:${dp}%;background:var(--draw)"></div>
+            <div style="width:${lp}%;background:var(--loss)"></div>
+          </span>
+        </td>
+        <td class="num">${Math.round(wp)}/${Math.round(dp)}/${Math.round(lp)}</td>
+        <td class="num">${m.averageOpponentRating}</td>
+        <td class="opening">${opening}</td>
+      </tr>`;
+  }).join("");
+  panel.innerHTML = `
+    <table>
+      <thead>
+        <tr>
+          <th>Move</th><th class="num">Games</th><th class="num">Share</th>
+          <th>Result (you)</th><th class="num">W/D/L %</th><th class="num">Opp Elo</th><th>Opening</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  panel.querySelectorAll("tbody tr").forEach((tr) => {
+    tr.onclick = () => {
+      state.play.push(tr.dataset.uci);
+      state.sanHistory.push(tr.dataset.san);
+      refresh();
+    };
+  });
+}
+
+async function refresh() {
+  renderCrumbs();
+  $("movesPanel").innerHTML = '<div class="loading">Loading…</div>';
+  try {
+    const r = await fetch("/api/explorer?" + buildQuery());
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      throw new Error(j.error || `HTTP ${r.status}`);
+    }
+    const data = await r.json();
+    $("opening").textContent = data.opening ? `${data.opening.eco} ${data.opening.name}` : "";
+    renderBar(data.white, data.draws, data.black);
+    renderTotals(data);
+    renderMoves(data.moves);
+  } catch (e) {
+    $("movesPanel").innerHTML = `<div class="error">${e.message}</div>`;
+  }
+}
+
+document.querySelectorAll(".preset").forEach((b) => {
+  b.onclick = () => setPreset(b.dataset.preset);
+});
+$("reset").onclick = () => setPreset(state.presetKey);
+$("back").onclick = () => {
+  if (state.play.length > 0) {
+    state.play.pop();
+    state.sanHistory.pop();
+    refresh();
+  }
+};
+$("speeds").onchange = refresh;
+$("modes").onchange = refresh;
+$("since").onchange = refresh;
+
+loadAccounts();
+setPreset("italian");
+</script>
+</body>
+</html>
