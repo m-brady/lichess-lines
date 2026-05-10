@@ -73,19 +73,39 @@ app.get("/api/explorer", async (c) => {
       params.set("player", player);
       params.set("recentGames", "0");
       const url = `https://explorer.lichess.org/player?${params.toString()}`;
-      const res = await fetch(url, { headers: { Accept: "application/x-ndjson" } });
-      if (!res.ok) {
-        throw new Error(`Lichess explorer ${res.status} for ${player}`);
-      }
-      const text = await res.text();
-      const last = text.split("\n").map((s) => s.trim()).filter(Boolean).at(-1);
-      if (!last) throw new Error(`Empty response for ${player}`);
-      return [player, JSON.parse(last) as ExplorerResponse] as const;
+      const data = await fetchFirstNdjson(url);
+      return [player, data] as const;
     }),
   );
 
   return c.json(merge(responses));
 });
+
+async function fetchFirstNdjson(url: string): Promise<ExplorerResponse> {
+  const res = await fetch(url, { headers: { Accept: "application/x-ndjson" } });
+  if (!res.ok || !res.body) throw new Error(`Lichess explorer ${res.status}`);
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let nl: number;
+      while ((nl = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, nl).trim();
+        buffer = buffer.slice(nl + 1);
+        if (line) return JSON.parse(line) as ExplorerResponse;
+      }
+    }
+    const tail = buffer.trim();
+    if (tail) return JSON.parse(tail) as ExplorerResponse;
+    throw new Error("Empty response from Lichess");
+  } finally {
+    reader.cancel().catch(() => {});
+  }
+}
 
 function merge(entries: readonly (readonly [string, ExplorerResponse])[]): MergedResponse {
   const perUser: MergedResponse["perUser"] = {};

@@ -78,8 +78,10 @@
       <strong>Preset:</strong>
       <button class="preset" data-preset="italian">Italian (White)</button>
       <button class="preset" data-preset="caro">Caro-Kann (Black)</button>
+      <button class="preset" data-preset="slav">Slav (Black)</button>
       <button class="preset" data-preset="white-e4">All 1.e4 (White)</button>
       <button class="preset" data-preset="black-vs-e4">All vs 1.e4 (Black)</button>
+      <button class="preset" data-preset="black-vs-d4">All vs 1.d4 (Black)</button>
     </div>
     <div class="row">
       <label>Speeds</label>
@@ -117,10 +119,12 @@
 
 <script>
 const PRESETS = {
-  italian:      { color: "white", play: ["e2e4", "e7e5", "g1f3", "b8c6", "f1c4"], label: "Italian (White)" },
-  caro:         { color: "black", play: ["e2e4", "c7c6"],                          label: "Caro-Kann (Black)" },
-  "white-e4":   { color: "white", play: ["e2e4"],                                  label: "1.e4 (White)" },
-  "black-vs-e4":{ color: "black", play: ["e2e4"],                                  label: "vs 1.e4 (Black)" },
+  italian:       { color: "white", play: ["e2e4", "e7e5", "g1f3", "b8c6", "f1c4"], label: "Italian (White)" },
+  caro:          { color: "black", play: ["e2e4", "c7c6"],                          label: "Caro-Kann (Black)" },
+  slav:          { color: "black", play: ["d2d4", "d7d5", "c2c4", "c7c6"],          label: "Slav (Black)" },
+  "white-e4":    { color: "white", play: ["e2e4"],                                  label: "1.e4 (White)" },
+  "black-vs-e4": { color: "black", play: ["e2e4"],                                  label: "vs 1.e4 (Black)" },
+  "black-vs-d4": { color: "black", play: ["d2d4"],                                  label: "vs 1.d4 (Black)" },
 };
 
 // UCI -> SAN at known starting positions for breadcrumbs. Tiny lookup; for moves

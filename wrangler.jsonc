@@ -5,9 +5,7 @@
   "compatibility_date": "2026-05-10",
   "assets": {
     "directory": "./public",
-    "binding": "ASSETS",
-    "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*"]
+    "binding": "ASSETS"
   },
   "vars": {
     // Comma-separated list of your Lichess usernames. Edit before deploying.
