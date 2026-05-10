@@ -102,6 +102,64 @@
     font-size: 11px;
     margin-left: 4px;
   }
+
+  @media (max-width: 600px) {
+    .wrap { padding: 12px 8px; }
+
+    #movesPanel thead { display: none; }
+    #movesPanel table,
+    #movesPanel tbody { display: block; }
+
+    #movesPanel tbody tr {
+      display: grid;
+      grid-template-columns: 56px auto auto 1fr auto;
+      grid-template-areas:
+        "san games share .   ."
+        "san bar   bar   bar wdl"
+        "san elo   elo   elo elo"
+        "san opening opening opening opening";
+      column-gap: 8px;
+      row-gap: 4px;
+      padding: 10px 6px;
+      align-items: center;
+      border-bottom: 1px solid var(--border);
+    }
+    #movesPanel td { padding: 0; border: none; }
+    #movesPanel td.san {
+      grid-area: san;
+      align-self: center;
+      font-size: 18px;
+    }
+    #movesPanel td:nth-child(2) {
+      grid-area: games;
+      text-align: left;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    #movesPanel td:nth-child(2)::after { content: " games"; }
+    #movesPanel td:nth-child(3) {
+      grid-area: share;
+      text-align: left;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    #movesPanel td:nth-child(3)::before { content: "· "; }
+    #movesPanel td:nth-child(4) { grid-area: bar; }
+    #movesPanel td:nth-child(5) { grid-area: wdl; }
+    #movesPanel td:nth-child(6) {
+      grid-area: elo;
+      text-align: left;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    #movesPanel td:nth-child(6):not(:empty)::before { content: "opp "; }
+    #movesPanel td.opening {
+      grid-area: opening;
+      white-space: normal;
+      word-break: break-word;
+    }
+    #movesPanel .mini-bar { width: 100%; max-width: 100%; }
+  }
 </style>
 </head>
 <body>
